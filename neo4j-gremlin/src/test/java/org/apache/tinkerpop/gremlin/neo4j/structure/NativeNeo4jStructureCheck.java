@@ -18,11 +18,22 @@
  */
 package org.apache.tinkerpop.gremlin.neo4j.structure;
 
+import static java.util.Arrays.asList;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
+
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.tinkerpop.gremlin.FeatureRequirement;
 import org.apache.tinkerpop.gremlin.neo4j.AbstractNeo4jGremlinTest;
 import org.apache.tinkerpop.gremlin.neo4j.process.traversal.LabelP;
 import org.apache.tinkerpop.gremlin.neo4j.structure.trait.MultiMetaNeo4jTrait;
 import org.apache.tinkerpop.gremlin.process.traversal.Traverser;
+import org.apache.tinkerpop.gremlin.process.traversal.dsl.graph.GraphTraversal;
+import org.apache.tinkerpop.gremlin.process.traversal.dsl.graph.__;
+import org.apache.tinkerpop.gremlin.structure.Edge;
 import org.apache.tinkerpop.gremlin.structure.Graph;
 import org.apache.tinkerpop.gremlin.structure.T;
 import org.apache.tinkerpop.gremlin.structure.Vertex;
@@ -34,14 +45,6 @@ import org.neo4j.tinkerpop.api.Neo4jGraphAPI;
 import org.neo4j.tinkerpop.api.Neo4jNode;
 import org.neo4j.tinkerpop.api.Neo4jRelationship;
 import org.neo4j.tinkerpop.api.Neo4jTx;
-
-import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
-
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
 
 
 /**
@@ -435,6 +438,53 @@ public class NativeNeo4jStructureCheck extends AbstractNeo4jGremlinTest {
             assertEquals(Long.valueOf(1), g.V().map(Traverser::get).has(T.label, LabelP.of("organism-animal")).count().next());
             assertEquals(Long.valueOf(1), g.V().map(Traverser::get).has(T.label, "organism-animal").count().next());
         });
+    }
+
+    @Test
+    @FeatureRequirement(featureClass = Graph.Features.VertexPropertyFeatures.class, feature = Graph.Features.VertexPropertyFeatures.FEATURE_UNIFORM_LIST_VALUES, supported = true)
+    @FeatureRequirement(featureClass = Graph.Features.EdgePropertyFeatures.class, feature = Graph.Features.EdgePropertyFeatures.FEATURE_UNIFORM_LIST_VALUES, supported = true)
+    public void shouldSupportArrayLists() {
+        String LABEL = "listProperty";
+        String PROP = "list";
+
+        GraphTraversal<Vertex, Object> setValues = g.addV("temp").as("temp")
+            .addV(LABEL).property(PROP, asList(1, 2, 3))
+            .addE(LABEL).to("temp").property(PROP, asList(1, 2, 3))
+            .values(PROP);
+        assertEquals(asList(1, 2, 3), setValues.next());
+        assertFalse(setValues.hasNext());
+
+        GraphTraversal<Vertex, Object> vertexValues = g.V().hasLabel(LABEL).values(PROP);
+        assertEquals(asList(1, 2, 3), vertexValues.next());
+        assertFalse(vertexValues.hasNext());
+
+        GraphTraversal<Edge, Object> edgeValues = g.E().hasLabel(LABEL).values(PROP);
+        assertEquals(asList(1, 2, 3), edgeValues.next());
+        assertFalse(edgeValues.hasNext());
+    }
+
+    @Test
+    @FeatureRequirement(featureClass = Graph.Features.VertexPropertyFeatures.class, feature = Graph.Features.VertexPropertyFeatures.FEATURE_UNIFORM_LIST_VALUES, supported = true)
+    @FeatureRequirement(featureClass = Graph.Features.EdgePropertyFeatures.class, feature = Graph.Features.EdgePropertyFeatures.FEATURE_UNIFORM_LIST_VALUES, supported = true)
+    public void shouldSupportRuntimeLists() {
+        String LABEL = "listProperty";
+        String PROP = "list";
+
+        GraphTraversal<Integer, Object> setValues = g.inject(1).inject(2).inject(3).fold().as("list")
+            .addV("temp").as("temp")
+            .addV(LABEL).property(PROP, __.select("list"))
+            .addE(LABEL).to("temp").property(PROP, __.select("list"))
+            .values(PROP);
+        assertEquals(asList(3, 2, 1), setValues.next());
+        assertFalse(setValues.hasNext());
+
+        GraphTraversal<Vertex, Object> vertexValues = g.V().hasLabel(LABEL).values(PROP);
+        assertEquals(asList(3, 2, 1), vertexValues.next());
+        assertFalse(vertexValues.hasNext());
+
+        GraphTraversal<Edge, Object> edgeValues = g.E().hasLabel(LABEL).values(PROP);
+        assertEquals(asList(3, 2, 1), edgeValues.next());
+        assertFalse(edgeValues.hasNext());
     }
 
 }

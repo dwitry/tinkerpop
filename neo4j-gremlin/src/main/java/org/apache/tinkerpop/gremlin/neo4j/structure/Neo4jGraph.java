@@ -18,6 +18,13 @@
  */
 package org.apache.tinkerpop.gremlin.neo4j.structure;
 
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.Optional;
+import java.util.function.Predicate;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.apache.commons.configuration.BaseConfiguration;
 import org.apache.commons.configuration.Configuration;
 import org.apache.commons.configuration.ConfigurationConverter;
@@ -50,13 +57,6 @@ import org.neo4j.tinkerpop.api.Neo4jTx;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Collections;
-import java.util.Iterator;
-import java.util.Map;
-import java.util.Optional;
-import java.util.function.Predicate;
-import java.util.stream.Stream;
-
 /**
  * @author Stephen Mallette (http://stephen.genoprime.com)
  * @author Marko A. Rodriguez (http://markorodriguez.com)
@@ -78,7 +78,7 @@ public final class Neo4jGraph implements Graph, WrappedGraph<Neo4jGraphAPI> {
         this.setProperty(Graph.GRAPH, Neo4jGraph.class.getName());
     }};
 
-    protected Features features = new Neo4jGraphFeatures();
+    protected Features features;
 
     protected Neo4jGraphAPI baseGraph;
     protected BaseConfiguration configuration = new BaseConfiguration();
@@ -87,6 +87,7 @@ public final class Neo4jGraph implements Graph, WrappedGraph<Neo4jGraphAPI> {
     public static final String CONFIG_CONF = "gremlin.neo4j.conf";
     public static final String CONFIG_META_PROPERTIES = "gremlin.neo4j.metaProperties";
     public static final String CONFIG_MULTI_PROPERTIES = "gremlin.neo4j.multiProperties";
+    public static final String CONFIG_LISTS_TO_ARRAYS = "gremlin.neo4j.conf.convertListsToArrays";
 
     private final Neo4jTransaction neo4jTransaction = new Neo4jTransaction();
     private Neo4jGraphVariables neo4jGraphVariables;
@@ -111,6 +112,9 @@ public final class Neo4jGraph implements Graph, WrappedGraph<Neo4jGraphAPI> {
         this.trait = supportsMultiProperties ? MultiMetaNeo4jTrait.instance() : NoMultiNoMetaNeo4jTrait.instance();
         if (supportsMultiProperties)
             LOGGER.warn(this.getClass().getSimpleName() + " multi/meta-properties feature is considered experimental and should not be used in a production setting until this warning is removed");
+
+        final boolean convertListsToArrays = this.configuration.getBoolean(CONFIG_LISTS_TO_ARRAYS, false);
+        this.features = new Neo4jGraphFeatures(convertListsToArrays);
         this.tx().commit();
     }
 
@@ -121,10 +125,12 @@ public final class Neo4jGraph implements Graph, WrappedGraph<Neo4jGraphAPI> {
     protected Neo4jGraph(final Configuration configuration) {
         this.configuration.copy(configuration);
         final String directory = this.configuration.getString(CONFIG_DIRECTORY);
-        final Map neo4jSpecificConfig = ConfigurationConverter.getMap(this.configuration.subset(CONFIG_CONF));
-        this.baseGraph = Neo4jFactory.Builder.open(directory, neo4jSpecificConfig);
+        final Map<Object, Object> neo4jSpecificConfig = ConfigurationConverter.getMap(this.configuration.subset(CONFIG_CONF));
+        this.baseGraph = Neo4jFactory.Builder.open(directory, toStringMap(neo4jSpecificConfig));
         this.initialize(this.baseGraph, configuration);
     }
+
+
 
     /**
      * Open a new {@link Neo4jGraph} instance.
@@ -311,6 +317,13 @@ public final class Neo4jGraph implements Graph, WrappedGraph<Neo4jGraphAPI> {
         return traversal;
     }
 
+    private Map<String, String> toStringMap(Map<Object, Object> objectMap) {
+        return objectMap.entrySet().stream().collect(
+                Collectors.toMap(
+                    e -> String.valueOf(e.getKey()),
+                    e -> String.valueOf(e.getValue())));
+    }
+
     class Neo4jTransaction extends AbstractThreadLocalTransaction {
 
         protected final ThreadLocal<Neo4jTx> threadLocalTx = ThreadLocal.withInitial(() -> null);
@@ -353,9 +366,15 @@ public final class Neo4jGraph implements Graph, WrappedGraph<Neo4jGraphAPI> {
     }
 
     public class Neo4jGraphFeatures implements Features {
-        protected GraphFeatures graphFeatures = new Neo4jGraphGraphFeatures();
-        protected VertexFeatures vertexFeatures = new Neo4jVertexFeatures();
-        protected EdgeFeatures edgeFeatures = new Neo4jEdgeFeatures();
+        protected final GraphFeatures graphFeatures;
+        protected final VertexFeatures vertexFeatures;
+        protected final EdgeFeatures edgeFeatures;
+
+        public Neo4jGraphFeatures(boolean convertListsToArrays) {
+            edgeFeatures = new Neo4jEdgeFeatures(convertListsToArrays);
+            vertexFeatures = new Neo4jVertexFeatures(convertListsToArrays);
+            graphFeatures = new Neo4jGraphGraphFeatures();
+        }
 
         @Override
         public GraphFeatures graph() {
@@ -407,9 +426,10 @@ public final class Neo4jGraph implements Graph, WrappedGraph<Neo4jGraphAPI> {
 
         public class Neo4jVertexFeatures extends Neo4jElementFeatures implements VertexFeatures {
 
-            private final VertexPropertyFeatures vertexPropertyFeatures = new Neo4jVertexPropertyFeatures();
+            private final VertexPropertyFeatures vertexPropertyFeatures;
 
-            protected Neo4jVertexFeatures() {
+            protected Neo4jVertexFeatures(boolean convertListsToArrays) {
+                vertexPropertyFeatures = new Neo4jVertexPropertyFeatures(convertListsToArrays);
             }
 
             @Override
@@ -440,9 +460,10 @@ public final class Neo4jGraph implements Graph, WrappedGraph<Neo4jGraphAPI> {
 
         public class Neo4jEdgeFeatures extends Neo4jElementFeatures implements EdgeFeatures {
 
-            private final EdgePropertyFeatures edgePropertyFeatures = new Neo4jEdgePropertyFeatures();
+            private final EdgePropertyFeatures edgePropertyFeatures;
 
-            Neo4jEdgeFeatures() {
+            Neo4jEdgeFeatures(boolean convertListsToArrays) {
+                edgePropertyFeatures = new Neo4jEdgePropertyFeatures(convertListsToArrays);
             }
 
             @Override
@@ -483,8 +504,10 @@ public final class Neo4jGraph implements Graph, WrappedGraph<Neo4jGraphAPI> {
         }
 
         public class Neo4jVertexPropertyFeatures implements VertexPropertyFeatures {
+            private boolean convertListsToArrays;
 
-            Neo4jVertexPropertyFeatures() {
+            Neo4jVertexPropertyFeatures(boolean convertListsToArrays) {
+                this.convertListsToArrays = convertListsToArrays;
             }
 
             @Override
@@ -504,7 +527,7 @@ public final class Neo4jGraph implements Graph, WrappedGraph<Neo4jGraphAPI> {
 
             @Override
             public boolean supportsUniformListValues() {
-                return false;
+                return convertListsToArrays;
             }
 
             @Override
@@ -516,11 +539,48 @@ public final class Neo4jGraph implements Graph, WrappedGraph<Neo4jGraphAPI> {
             public boolean supportsAnyIds() {
                 return false;
             }
+
+            @Override
+            public boolean supportsBooleanArrayValues() {
+                return !convertListsToArrays;
+            }
+
+            @Override
+            public boolean supportsByteArrayValues() {
+                return !convertListsToArrays;
+            }
+
+            @Override
+            public boolean supportsDoubleArrayValues() {
+                return !convertListsToArrays;
+            }
+
+            @Override
+            public boolean supportsFloatArrayValues() {
+                return !convertListsToArrays;
+            }
+
+            @Override
+            public boolean supportsIntegerArrayValues() {
+                return !convertListsToArrays;
+            }
+
+            @Override
+            public boolean supportsStringArrayValues() {
+                return !convertListsToArrays;
+            }
+
+            @Override
+            public boolean supportsLongArrayValues() {
+                return !convertListsToArrays;
+            }
         }
 
         public class Neo4jEdgePropertyFeatures implements EdgePropertyFeatures {
+            private boolean convertListsToArrays;
 
-            Neo4jEdgePropertyFeatures() {
+            Neo4jEdgePropertyFeatures(boolean convertListsToArrays) {
+                this.convertListsToArrays = convertListsToArrays;
             }
 
             @Override
@@ -540,7 +600,42 @@ public final class Neo4jGraph implements Graph, WrappedGraph<Neo4jGraphAPI> {
 
             @Override
             public boolean supportsUniformListValues() {
-                return false;
+                return convertListsToArrays;
+            }
+
+            @Override
+            public boolean supportsBooleanArrayValues() {
+                return !convertListsToArrays;
+            }
+
+            @Override
+            public boolean supportsByteArrayValues() {
+                return !convertListsToArrays;
+            }
+
+            @Override
+            public boolean supportsDoubleArrayValues() {
+                return !convertListsToArrays;
+            }
+
+            @Override
+            public boolean supportsFloatArrayValues() {
+                return !convertListsToArrays;
+            }
+
+            @Override
+            public boolean supportsIntegerArrayValues() {
+                return !convertListsToArrays;
+            }
+
+            @Override
+            public boolean supportsStringArrayValues() {
+                return !convertListsToArrays;
+            }
+
+            @Override
+            public boolean supportsLongArrayValues() {
+                return !convertListsToArrays;
             }
         }
     }
